@@ -30,7 +30,7 @@ class SFTPStorage(Storage):
 
     def __init__(self, host=None, params=None, interactive=None, file_mode=None,
                  dir_mode=None, uid=None, gid=None, known_host_file=None,
-                 root_path=None, base_url=None):
+                 root_path=None, base_url=None, buffer_size=None):
         self._host = host or setting('SFTP_STORAGE_HOST')
 
         self._params = params or setting('SFTP_STORAGE_PARAMS', {})
@@ -45,6 +45,9 @@ class SFTPStorage(Storage):
         self._gid = setting('SFTP_STORAGE_GID') if gid is None else gid
         self._known_host_file = setting('SFTP_KNOWN_HOST_FILE') \
             if known_host_file is None else known_host_file
+
+        self._buffer_size = setting('SFTP_STORAGE_BUFFER_SIZE', default=8192) \
+                            if buffer_size is None else buffer_size
 
         self._root_path = setting('SFTP_STORAGE_ROOT', '') \
             if root_path is None else root_path
@@ -131,9 +134,10 @@ class SFTPStorage(Storage):
         if not self.exists(dirname):
             self._mkdir(dirname)
 
-        f = self.sftp.open(path, 'wb')
-        f.write(content.file.read())
-        f.close()
+        with self.sftp.open(path, 'wb') as f:
+            for chunk in iter(lambda: content.read(self._buffer_size), b''):
+            # for chunk in content.chunks(chunk_size=self._buffer_size):
+                f.write(chunk)
 
         # set file permissions if configured
         if self._file_mode is not None:

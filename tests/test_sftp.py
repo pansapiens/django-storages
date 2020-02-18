@@ -69,16 +69,18 @@ class SFTPStorageTest(TestCase):
 
     @patch('storages.backends.sftpstorage.SFTPStorage.sftp')
     def test_save(self, mock_sftp):
-        self.storage._save('foo', File(io.BytesIO(b'foo'), 'foo'))
-        self.assertTrue(mock_sftp.open.return_value.write.called)
+        self.storage._save('foo', File(io.BytesIO(b'foocontent'), 'foo'))
+        self.assertTrue(mock_sftp.open.__enter__.write.called_once_with(b'foocontent'))
+        self.assertTrue(mock_sftp.open.__exit__.called_once_with(None, None, None))
 
     @patch('storages.backends.sftpstorage.SFTPStorage.sftp', **{
         'stat.side_effect': (IOError(), True)
     })
     def test_save_in_subdir(self, mock_sftp):
-        self.storage._save('bar/foo', File(io.BytesIO(b'foo'), 'foo'))
+        self.storage._save('bar/foo', File(io.BytesIO(b'foocontent'), 'foo'))
         self.assertEqual(mock_sftp.mkdir.call_args_list[0][0], ('bar',))
-        self.assertTrue(mock_sftp.open.return_value.write.called)
+        self.assertTrue(mock_sftp.open.__enter__.write.called_once_with(b'foocontent'))
+        self.assertTrue(mock_sftp.open.__exit__.called_once_with(None, None, None))
 
     @patch('storages.backends.sftpstorage.SFTPStorage.sftp')
     def test_delete(self, mock_sftp):
@@ -177,6 +179,7 @@ class SFTPStorageFileTest(TestCase):
 
     @patch('storages.backends.sftpstorage.SFTPStorage.sftp')
     def test_close(self, mock_sftp):
-        self.file.write(b'foo')
+        self.file.write(b'foocontent')
         self.file.close()
-        self.assertTrue(mock_sftp.open.return_value.write.called)
+        self.assertTrue(mock_sftp.open.__enter__.write.called_once_with(b'foocontent'))
+        self.assertTrue(mock_sftp.open.__exit__.called_once_with(None, None, None))
