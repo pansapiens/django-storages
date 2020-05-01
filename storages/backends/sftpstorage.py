@@ -136,8 +136,12 @@ class SFTPStorage(Storage):
 
         with self.sftp.open(path, 'wb') as f:
             for chunk in iter(lambda: content.read(self._buffer_size), b''):
-            # for chunk in content.chunks(chunk_size=self._buffer_size):
                 f.write(chunk)
+
+        # Or dogfood using an SFTPStorageFile instance rather than paramiko directly ?
+        # with self.open(name, 'wb') as f:
+        #     for chunk in iter(lambda: content.read(self._buffer_size), b''):
+        #         f.write(chunk)
 
         # set file permissions if configured
         if self._file_mode is not None:
@@ -200,7 +204,7 @@ class SFTPStorageFile(File):
     def __init__(self, name, storage, mode):
         self.name = name
         self.mode = mode
-        self.file = io.BytesIO()
+        self.file = None
         self._storage = storage
         self._is_read = False
         self._is_dirty = False
@@ -212,7 +216,9 @@ class SFTPStorageFile(File):
         return self._size
 
     def read(self, num_bytes=None):
-        if not self._is_read:
+        if self._is_dirty:
+            self.close()
+        if not self._is_read or self.file is None:
             self.file = self._storage._read(self.name)
             self._is_read = True
 
@@ -221,19 +227,38 @@ class SFTPStorageFile(File):
     def write(self, content):
         if 'w' not in self.mode:
             raise AttributeError("File was opened for read-only access.")
-        self.file = io.BytesIO(content)
+        if self.file is None:
+            self.file = self._storage.sftp.open(
+                self._storage._remote_path(self.name), 
+                'wb', 
+                bufsize=self._storage._buffer_size)
+        self.file.write(content)
         self._is_dirty = True
         self._is_read = True
+        # self._storage._save(self.name, self)
 
     def open(self, mode=None):
+        # From Django 3.0 docs: 
+        # "When reopening a file, mode will override whatever mode 
+        # the file was originally opened with; None means to reopen 
+        # with the original mode."
+        if mode is None:
+            self.close()
+            mode = self.mode
+        elif mode != self.mode:
+            self.close()
+
         if not self.closed:
             self.seek(0)
-        elif self.name and self._storage.exists(self.name):
-            self.file = self._storage._open(self.name, mode or self.mode)
         else:
-            raise ValueError("The file cannot be reopened.")
+        #elif self.name: and self._storage.exists(self.name):
+            # self.file = self._storage._open(self.name, mode or self.mode)
+            self.file = self._storage.sftp.open(
+                self._storage._remote_path(self.name), 
+                mode,
+                bufsize=self._storage._buffer_size)
 
-    def close(self):
-        if self._is_dirty:
-            self._storage._save(self.name, self)
-        self.file.close()
+    # def close(self):
+    #     #if self._is_dirty:
+    #     #    self._storage._save(self.name, self)
+    #     self.file.close()

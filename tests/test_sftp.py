@@ -173,9 +173,12 @@ class SFTPStorageFileTest(TestCase):
         self.assertEqual(self.file.read(), b'foo')
         self.assertTrue(mock_sftp.open.called)
 
-    def test_write(self):
+    @patch('storages.backends.sftpstorage.SFTPStorage.sftp')
+    def test_write(self, mock_sftp):
         self.file.write(b'foo')
-        self.assertEqual(self.file.file.read(), b'foo')
+        #self.assertEqual(self.file.file.read(), b'foocontent')
+        self.assertTrue(mock_sftp.open.__enter__.write.called_once_with(b'foocontent'))
+        self.assertTrue(mock_sftp.open.__exit__.called_once_with(None, None, None))
 
     @patch('storages.backends.sftpstorage.SFTPStorage.sftp')
     def test_close(self, mock_sftp):
