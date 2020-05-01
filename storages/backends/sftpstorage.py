@@ -258,7 +258,8 @@ class SFTPStorageFile(File):
                 mode,
                 bufsize=self._storage._buffer_size)
 
-    # def close(self):
-    #     #if self._is_dirty:
-    #     #    self._storage._save(self.name, self)
-    #     self.file.close()
+    def close(self):
+        #if self._is_dirty:
+        #    self._storage._save(self.name, self)
+        if self.file:
+            self.file.close()
