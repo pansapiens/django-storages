@@ -139,6 +139,7 @@ class SFTPStorage(Storage):
         if not self.exists(dirname):
             self._mkdir(dirname)
 
+        # TODO: Would self.sftp.putfo(content, confirm=True) be better here ?
         with self.sftp.open(path, 'wb') as f:
             f.set_pipelined(self._pipelined)
             for chunk in iter(lambda: content.read(self._buffer_size), b''):
@@ -228,7 +229,7 @@ class SFTPStorageFile(File):
     def pipelined(self):
         return self._pipelined
 
-    @property.setter
+    @pipelined.setter
     def pipelined(self, value):
         self._pipelined = value
         if self.file:
