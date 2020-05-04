@@ -30,7 +30,7 @@ class SFTPStorage(Storage):
 
     def __init__(self, host=None, params=None, interactive=None, file_mode=None,
                  dir_mode=None, uid=None, gid=None, known_host_file=None,
-                 root_path=None, base_url=None, buffer_size=None):
+                 root_path=None, base_url=None, buffer_size=None, pipelined=None):
         self._host = host or setting('SFTP_STORAGE_HOST')
 
         self._params = params or setting('SFTP_STORAGE_PARAMS', {})
@@ -48,6 +48,9 @@ class SFTPStorage(Storage):
 
         self._buffer_size = setting('SFTP_STORAGE_BUFFER_SIZE', default=8192) \
                             if buffer_size is None else buffer_size
+
+        self._pipelined = setting('SFTP_STORAGE_PIPELINED', default=False) \
+            if pipelined is None else pipelined
 
         self._root_path = setting('SFTP_STORAGE_ROOT', '') \
             if root_path is None else root_path
@@ -96,11 +99,13 @@ class SFTPStorage(Storage):
         return posixpath.join(self._root_path, name)
 
     def _open(self, name, mode='rb'):
-        return SFTPStorageFile(name, self, mode)
+        return SFTPStorageFile(name, self, mode, pipelined=self._pipelined)
 
     def _read(self, name):
         remote_path = self._remote_path(name)
-        return self.sftp.open(remote_path, 'rb')
+        sftpfile = self.sftp.open(remote_path, 'rb')
+        sftpfile.set_pipelined(self._pipelined)
+        return sftpfile
 
     def _chown(self, path, uid=None, gid=None):
         """Set uid and/or gid for file at path."""
@@ -135,6 +140,7 @@ class SFTPStorage(Storage):
             self._mkdir(dirname)
 
         with self.sftp.open(path, 'wb') as f:
+            f.set_pipelined(self._pipelined)
             for chunk in iter(lambda: content.read(self._buffer_size), b''):
                 f.write(chunk)
 
@@ -201,13 +207,16 @@ class SFTPStorage(Storage):
 
 
 class SFTPStorageFile(File):
-    def __init__(self, name, storage, mode):
+    def __init__(self, name, storage, mode, pipelined=False):
         self.name = name
         self.mode = mode
         self.file = None
         self._storage = storage
+        # TODO: Should we just be using self.file.readable() and 
+        #       self.file.writeable() instead ?
         self._is_read = False
         self._is_dirty = False
+        self._pipelined = pipelined
 
     @property
     def size(self):
@@ -215,11 +224,23 @@ class SFTPStorageFile(File):
             self._size = self._storage.size(self.name)
         return self._size
 
+    @property
+    def pipelined(self):
+        return self._pipelined
+
+    @property.setter
+    def pipelined(self, value):
+        self._pipelined = value
+        if self.file:
+            self.file.set_pipelined(self._pipelined)
+
     def read(self, num_bytes=None):
         if self._is_dirty:
             self.close()
+            self.open(mode='rb')
         if not self._is_read or self.file is None:
-            self.file = self._storage._read(self.name)
+            self.open(mode='rb')
+            # self.file = self._storage._read(self.name)
             self._is_read = True
 
         return self.file.read(num_bytes)
@@ -228,38 +249,34 @@ class SFTPStorageFile(File):
         if 'w' not in self.mode:
             raise AttributeError("File was opened for read-only access.")
         if self.file is None:
-            self.file = self._storage.sftp.open(
-                self._storage._remote_path(self.name), 
-                'wb', 
-                bufsize=self._storage._buffer_size)
+            self.open(mode='wb')
         self.file.write(content)
         self._is_dirty = True
         self._is_read = True
-        # self._storage._save(self.name, self)
 
     def open(self, mode=None):
         # From Django 3.0 docs: 
         # "When reopening a file, mode will override whatever mode 
         # the file was originally opened with; None means to reopen 
         # with the original mode."
-        if mode is None:
-            self.close()
-            mode = self.mode
-        elif mode != self.mode:
-            self.close()
-
         if not self.closed:
-            self.seek(0)
-        else:
-        #elif self.name: and self._storage.exists(self.name):
-            # self.file = self._storage._open(self.name, mode or self.mode)
-            self.file = self._storage.sftp.open(
-                self._storage._remote_path(self.name), 
-                mode,
-                bufsize=self._storage._buffer_size)
+            if mode != self.mode:
+                self.close()
+            elif mode is None:
+                self.close()
+                mode = self.mode
+            else:
+                self.seek(0)
+                return
+
+        # self.file = self._storage._open(self.name, self.mode)
+        self.file = self._storage.sftp.open(
+            self._storage._remote_path(self.name), 
+            mode,
+            bufsize=self._storage._buffer_size)
+        
+        self.file.set_pipelined(self._pipelined)
 
     def close(self):
-        #if self._is_dirty:
-        #    self._storage._save(self.name, self)
         if self.file:
             self.file.close()
