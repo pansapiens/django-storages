@@ -270,10 +270,10 @@ class SFTPStorageFile(File):
                 self.seek(0)
                 return
 
-        # self.file = self._storage._open(self.name, self.mode)
+        # self.file = self._storage._open(self.name, mode or self.mode)
         self.file = self._storage.sftp.open(
             self._storage._remote_path(self.name), 
-            mode,
+            mode or self.mode,
             bufsize=self._storage._buffer_size)
         
         self.file.set_pipelined(self._pipelined)
