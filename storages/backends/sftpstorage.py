@@ -2,7 +2,7 @@
 # Author: Brent Tubbs <brent.tubbs@gmail.com>
 # License: MIT
 #
-# Modeled on the FTP storage by Rafal Jonca <jonca.rafal@gmail.com>
+# Originally modeled on the FTP storage by Rafal Jonca <jonca.rafal@gmail.com>
 from __future__ import print_function
 
 import getpass
@@ -46,7 +46,7 @@ class SFTPStorage(Storage):
         self._known_host_file = setting('SFTP_KNOWN_HOST_FILE') \
             if known_host_file is None else known_host_file
 
-        self._buffer_size = setting('SFTP_STORAGE_BUFFER_SIZE', default=8192) \
+        self.buffer_size = setting('SFTP_STORAGE_BUFFER_SIZE', default=-1) \
                             if buffer_size is None else buffer_size
 
         self._pipelined = setting('SFTP_STORAGE_PIPELINED', default=False) \
@@ -139,16 +139,29 @@ class SFTPStorage(Storage):
         if not self.exists(dirname):
             self._mkdir(dirname)
 
-        # TODO: Would self.sftp.putfo(content, confirm=True) be better here ?
-        with self.sftp.open(path, 'wb') as f:
+        # The paramiko sftp bufsize can be -1 to use the default Python buffer size, 
+        # bufsize=0 for unbuffered, or another positive value to buffer that many bytes.
+        # http://docs.paramiko.org/en/stable/api/sftp.html#paramiko.sftp_client.SFTPClient.open
+        # The read chuck size usually matches the write buffer size, but can't be 0 or -1, 
+        # so we set a default in this case.
+        read_bufsize = self.buffer_size
+        if read_bufsize < 1:
+            read_bufsize = io.DEFAULT_BUFFER_SIZE  # probably 8192
+
+        with self.sftp.open(path, mode='wb', bufsize=self.buffer_size) as f:
             f.set_pipelined(self._pipelined)
-            for chunk in iter(lambda: content.read(self._buffer_size), b''):
+            for chunk in iter(lambda: content.read(read_bufsize), b''):
                 f.write(chunk)
 
         # Or dogfood using an SFTPStorageFile instance rather than paramiko directly ?
         # with self.open(name, 'wb') as f:
-        #     for chunk in iter(lambda: content.read(self._buffer_size), b''):
+        #     for chunk in iter(lambda: content.read(read_bufsize), b''):
         #         f.write(chunk)
+
+        # This method uses pipelining (and less code), but doesn't seem to allow the 
+        # write buffer size to be set (but we could wrap content like 
+        # io.BufferedReader(content, buffer_size=read_bufsize)
+        # self.sftp.putfo(content, path, confirm=True)
 
         # set file permissions if configured
         if self._file_mode is not None:
@@ -235,25 +248,42 @@ class SFTPStorageFile(File):
         if self.file:
             self.file.set_pipelined(self._pipelined)
 
+    # def read(self, num_bytes=None):
+    #     if self._is_dirty:
+    #         self.close()
+    #         self.open(mode='rb')
+    #     if not self._is_read or self.file is None:
+    #         self.open(mode='rb')
+    #         # self.file = self._storage._read(self.name)
+    #         self._is_read = True
+
+    #     return self.file.read(num_bytes)
+
+    # def write(self, content):
+    #     if 'w' not in self.mode:
+    #         raise AttributeError("File was opened for read-only access.")
+    #     if self.file is None:
+    #         self.open(mode='wb')
+    #     self.file.write(content)
+    #     self._is_dirty = True
+    #     self._is_read = True
+
+
     def read(self, num_bytes=None):
-        if self._is_dirty:
-            self.close()
-            self.open(mode='rb')
-        if not self._is_read or self.file is None:
-            self.open(mode='rb')
-            # self.file = self._storage._read(self.name)
-            self._is_read = True
+        if not self.file:
+            self.open(mode=self.mode or 'rb')
+        if not self.file.readable():
+            raise AttributeError(f"File was opened for write-only access.")
 
         return self.file.read(num_bytes)
 
     def write(self, content):
-        if 'w' not in self.mode:
-            raise AttributeError("File was opened for read-only access.")
-        if self.file is None:
-            self.open(mode='wb')
+        if not self.file:
+            self.open(mode=self.mode or 'wb')
+        if not self.file.writeable():
+            raise AttributeError(f"File was opened for read-only access.")
+
         self.file.write(content)
-        self._is_dirty = True
-        self._is_read = True
 
     def open(self, mode=None):
         # From Django 3.0 docs: 
@@ -274,7 +304,7 @@ class SFTPStorageFile(File):
         self.file = self._storage.sftp.open(
             self._storage._remote_path(self.name), 
             mode or self.mode,
-            bufsize=self._storage._buffer_size)
+            bufsize=self._storage.buffer_size)
         
         self.file.set_pipelined(self._pipelined)
 
