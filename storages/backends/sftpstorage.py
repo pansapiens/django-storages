@@ -27,10 +27,22 @@ except ImportError:
 
 @deconstructible
 class SFTPStorage(Storage):
-
+    """
+    SFTP storage backend for Django. 
+    This is a wrapper around the paramiko.SFTPClient.
+    """
     def __init__(self, host=None, params=None, interactive=None, file_mode=None,
                  dir_mode=None, uid=None, gid=None, known_host_file=None,
                  root_path=None, base_url=None, buffer_size=None, pipelined=None):
+        """
+        `buffer_size` is used as the paramiko sftp `bufsize` argument. 
+        buffer_size=-1 to uses the default Python buffer size, buffer_size=0 for 
+        unbuffered. 
+        See: http://docs.paramiko.org/en/stable/api/sftp.html#paramiko.sftp_client.SFTPClient.open
+
+        `pipelined` turns on pipelining for write operations, where paramiko 
+        won't wait for the server response before sending the next write.
+        """
         self._host = host or setting('SFTP_STORAGE_HOST')
 
         self._params = params or setting('SFTP_STORAGE_PARAMS', {})
@@ -139,11 +151,8 @@ class SFTPStorage(Storage):
         if not self.exists(dirname):
             self._mkdir(dirname)
 
-        # The paramiko sftp bufsize can be -1 to use the default Python buffer size, 
-        # bufsize=0 for unbuffered, or another positive value to buffer that many bytes.
-        # http://docs.paramiko.org/en/stable/api/sftp.html#paramiko.sftp_client.SFTPClient.open
-        # The read chuck size usually matches the write buffer size, but can't be 0 or -1, 
-        # so we set a default in this case.
+        # The read chunk size usually matches the write buffer size, but can't be 0 or -1 
+        # (unlike bufsize for paramiko, which might be), so we set a default in this case.
         read_bufsize = self.buffer_size
         if read_bufsize < 1:
             read_bufsize = io.DEFAULT_BUFFER_SIZE  # probably 8192
@@ -226,10 +235,6 @@ class SFTPStorageFile(File):
         self.mode = mode
         self.file = None
         self._storage = storage
-        # TODO: Should we just be using self.file.readable() and 
-        #       self.file.writeable() instead ?
-        self._is_read = False
-        self._is_dirty = False
         self._pipelined = pipelined
 
     @property
@@ -247,27 +252,6 @@ class SFTPStorageFile(File):
         self._pipelined = value
         if self.file:
             self.file.set_pipelined(self._pipelined)
-
-    # def read(self, num_bytes=None):
-    #     if self._is_dirty:
-    #         self.close()
-    #         self.open(mode='rb')
-    #     if not self._is_read or self.file is None:
-    #         self.open(mode='rb')
-    #         # self.file = self._storage._read(self.name)
-    #         self._is_read = True
-
-    #     return self.file.read(num_bytes)
-
-    # def write(self, content):
-    #     if 'w' not in self.mode:
-    #         raise AttributeError("File was opened for read-only access.")
-    #     if self.file is None:
-    #         self.open(mode='wb')
-    #     self.file.write(content)
-    #     self._is_dirty = True
-    #     self._is_read = True
-
 
     def read(self, num_bytes=None):
         if not self.file:
@@ -300,7 +284,6 @@ class SFTPStorageFile(File):
                 self.seek(0)
                 return
 
-        # self.file = self._storage._open(self.name, mode or self.mode)
         self.file = self._storage.sftp.open(
             self._storage._remote_path(self.name), 
             mode or self.mode,
